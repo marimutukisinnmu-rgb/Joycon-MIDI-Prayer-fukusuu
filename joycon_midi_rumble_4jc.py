@@ -12,6 +12,14 @@ Input:
   -files A.mid B.mid C.mid D.mid E.mid
                         five MIDI files, one per track A-E
 
+Strength:
+  --strength 55         global amplitude ceiling, default/recommended 55%
+  --strength 100        allow the full encoded amplitude range
+  --strength 0          silence all note amplitudes
+  Values below the ceiling are preserved; only values above it are capped.
+  Valid range is 0-100%. This is an amplitude control, not a guarantee that
+  perceived vibration strength scales linearly by the same percentage.
+
 With fewer than four Joy-Cons, the program uses the connected/selected devices
 in order, so one Joy-Con tests A/B, two test A/B and C, and so on.
 
@@ -301,6 +309,7 @@ def main() -> None:
         print("Routing: J1=A/B; J2=C; J3=D; J4=E")
         print(f"Global rumble strength ceiling: {args.strength}% (range 0-100; default 55%).")
         print("Upper-cap mode: amplitudes below the ceiling are preserved.")
+        print("To change the ceiling, add --strength 0 through --strength 100 to the command.")
         print("Experimental rumble encoding; press Ctrl+C to stop.")
         start = time.perf_counter()
         positions = [0] * 5
