@@ -320,7 +320,8 @@ def main() -> None:
         print(f"Global rumble strength ceiling: {args.strength}% (range 0-100; default 55%).")
         print("Upper-cap mode: amplitudes below the ceiling are preserved.")
         print("To change the ceiling, add --strength 0 through --strength 100 to the command.")
-        print("Experimental rumble encoding; press Ctrl+C to stop.")\n        if args.log:
+        print("Experimental rumble encoding; press Ctrl+C to stop.")
+        if args.log:
             print("Payload logging enabled: each Jx line shows the 4-byte motor payload in HEX and BIN.")
         start = time.perf_counter()
         positions = [0] * 5
@@ -350,7 +351,8 @@ def main() -> None:
                     low_freq, low_amp = low_note if low_note else (120.0, 0.0)
                     high_freq, high_amp = high_note if high_note else (200.0, 0.0)
                     payload = make_rumble(low_freq, low_amp, high_freq, high_amp)
-                    device.send(payload, payload)\n                    if args.log:
+                    device.send(payload, payload)
+                    if args.log:
                         print(f"[{now:8.3f}s] J{jc_index + 1}: {format_payload(payload)}")
             time.sleep(0.001)
     except KeyboardInterrupt:
