@@ -324,5 +324,5 @@ def main() -> None:
     print("Playback finished.")
 
 
-if __path__ == "__main__":
+if __name__ == "__main__":
     main()
