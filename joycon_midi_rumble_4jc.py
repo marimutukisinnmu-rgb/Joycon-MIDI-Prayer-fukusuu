@@ -13,13 +13,11 @@ Input:
                         five MIDI files, one per track A-E
 
 Strength:
-  --strength 55         global amplitude ceiling, default/recommended 55%
-  --strength 100        allow the full encoded amplitude range
+  --strength 25         scale note amplitudes to 25% of their original value
+  --strength 100        use the full calculated amplitude
   --strength 0          silence all note amplitudes
   --log                 print each Joy-Con rumble payload in hex and binary
-  Values below the ceiling are preserved; only values above it are capped.
-  Valid range is 0-100%. This is an amplitude control, not a guarantee that
-  perceived vibration strength scales linearly by the same percentage.
+  Valid range is 0-100%. Perceived vibration and sound do not scale linearly.
 
 With fewer than four Joy-Cons, the program uses the connected/selected devices
 in order, so one Joy-Con tests A/B, two test A/B and C, and so on.
@@ -47,7 +45,7 @@ MIN_FREQ = 40.0
 MAX_FREQ = 1252.0
 MIN_STRENGTH_PERCENT = 0
 MAX_STRENGTH_PERCENT = 100
-DEFAULT_STRENGTH_PERCENT = 55  # Recommended global ceiling
+DEFAULT_STRENGTH_PERCENT = 25  # Conservative starting scale
 
 
 def encode_amplitude(amp: float) -> int:
@@ -258,14 +256,10 @@ def note_frequency(note: int) -> float:
 
 
 def velocity_amplitude(velocity: int, strength_percent: int) -> float:
-    """Convert MIDI velocity to amplitude, applying a global ceiling only.
-
-    Values below the selected ceiling are preserved; stronger values are capped.
-    Strength is a 0-100 percentage. The default recommended ceiling is 55%.
-    """
+    """Convert MIDI velocity to amplitude and scale it by the selected percentage."""
     raw_amp = 0.15 + (0.65 - 0.15) * (velocity / 127.0)
-    ceiling = max(MIN_STRENGTH_PERCENT, min(MAX_STRENGTH_PERCENT, strength_percent)) / 100.0
-    return min(raw_amp, ceiling)
+    scale = max(MIN_STRENGTH_PERCENT, min(MAX_STRENGTH_PERCENT, strength_percent)) / 100.0
+    return raw_amp * scale
 
 
 def format_payload(payload: bytes) -> str:
