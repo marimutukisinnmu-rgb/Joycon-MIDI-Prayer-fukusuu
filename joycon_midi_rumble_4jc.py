@@ -36,6 +36,9 @@ NEUTRAL = bytes([0x00, 0x01, 0x40, 0x40])
 TRACK_NAMES = ("A", "B", "C", "D", "E")
 MIN_FREQ = 40.0
 MAX_FREQ = 1252.0
+MIN_STRENGTH_PERCENT = 0
+MAX_STRENGTH_PERCENT = 100
+DEFAULT_STRENGTH_PERCENT = 55  # Recommended global ceiling
 
 
 def encode_amplitude(amp: float) -> int:
@@ -245,8 +248,15 @@ def note_frequency(note: int) -> float:
     return 440.0 * (2.0 ** ((note - 69) / 12.0))
 
 
-def velocity_amplitude(velocity: int) -> float:
-    return 0.15 + (0.65 - 0.15) * (velocity / 127.0)
+def velocity_amplitude(velocity: int, strength_percent: int) -> float:
+    """Convert MIDI velocity to amplitude, applying a global ceiling only.
+
+    Values below the selected ceiling are preserved; stronger values are capped.
+    Strength is a 0-100 percentage. The default recommended ceiling is 55%.
+    """
+    raw_amp = 0.15 + (0.65 - 0.15) * (velocity / 127.0)
+    ceiling = max(MIN_STRENGTH_PERCENT, min(MAX_STRENGTH_PERCENT, strength_percent)) / 100.0
+    return min(raw_amp, ceiling)
 
 
 def main() -> None:
@@ -257,6 +267,10 @@ def main() -> None:
                         help="skip one measure before starting drums (default: off)")
     parser.add_argument("--bpm", type=float, default=120.0,
                         help="tempo used to calculate the first measure (default: 120)")
+    parser.add_argument("--strength", type=int, default=DEFAULT_STRENGTH_PERCENT,
+                        choices=range(MIN_STRENGTH_PERCENT, MAX_STRENGTH_PERCENT + 1),
+                        metavar="0-100",
+                        help="global rumble strength ceiling in percent; lower amplitudes are preserved (default: 55)")
     args = parser.parse_args()
     if args.bpm <= 0:
         parser.error("--bpm must be greater than zero")
@@ -285,6 +299,8 @@ def main() -> None:
 
         print(f"Partial test mode: {len(devices)} Joy-Con(s).")
         print("Routing: J1=A/B; J2=C; J3=D; J4=E")
+        print(f"Global rumble strength ceiling: {args.strength}% (range 0-100; default 55%).")
+        print("Upper-cap mode: amplitudes below the ceiling are preserved.")
         print("Experimental rumble encoding; press Ctrl+C to stop.")
         start = time.perf_counter()
         positions = [0] * 5
@@ -298,7 +314,7 @@ def main() -> None:
                 while positions[i] < len(track_events) and track_events[positions[i]][0] <= now:
                     _, kind, note, velocity = track_events[positions[i]]
                     if kind == "on":
-                        active[i][note] = (note_frequency(note), velocity_amplitude(velocity))
+                        active[i][note] = (note_frequency(note), velocity_amplitude(velocity, args.strength))
                     else:
                         active[i].pop(note, None)
                     positions[i] += 1
