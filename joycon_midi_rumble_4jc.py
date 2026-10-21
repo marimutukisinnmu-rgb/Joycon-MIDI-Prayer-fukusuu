@@ -344,6 +344,10 @@ def main() -> None:
                     high_note = next(iter(active[high_idx].values()), None)
                     low_freq, low_amp = low_note if low_note else (120.0, 0.0)
                     high_freq, high_amp = high_note if high_note else (200.0, 0.0)
+                    # J1 is especially loud on this setup: halve its Low/High amplitudes.
+                    if jc_index == 0:
+                        low_amp *= 0.5
+                        high_amp *= 0.5
                     payload = make_rumble(low_freq, low_amp, high_freq, high_amp)
                     device.send(payload, payload)
                     if args.log:
