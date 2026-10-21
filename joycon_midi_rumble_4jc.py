@@ -280,7 +280,7 @@ def main() -> None:
     parser.add_argument("--strength", type=int, default=DEFAULT_STRENGTH_PERCENT,
                         choices=range(MIN_STRENGTH_PERCENT, MAX_STRENGTH_PERCENT + 1),
                         metavar="0-100",
-                        help="global rumble strength ceiling in percent; lower amplitudes are preserved (default: 55)")
+                        help="scale calculated rumble amplitude by this percentage (default: 25)")
     parser.add_argument("--log", action="store_true",
                         help="log each Joy-Con rumble payload as hexadecimal and binary")
     args = parser.parse_args()
@@ -311,9 +311,9 @@ def main() -> None:
 
         print(f"Partial test mode: {len(devices)} Joy-Con(s).")
         print("Routing: J1=A/B; J2=C; J3=D; J4=E")
-        print(f"Global rumble strength ceiling: {args.strength}% (range 0-100; default 55%).")
-        print("Upper-cap mode: amplitudes below the ceiling are preserved.")
-        print("To change the ceiling, add --strength 0 through --strength 100 to the command.")
+        print(f"Global rumble amplitude scale: {args.strength}% (range 0-100; default 25%).")
+        print("Note: perceived vibration and sound may not scale linearly.")
+        print("To change the scale, add --strength 0 through --strength 100 to the command.")
         print("Experimental rumble encoding; press Ctrl+C to stop.")
         if args.log:
             print("Payload logging enabled: each Jx line shows the 4-byte motor payload in HEX and BIN.")
