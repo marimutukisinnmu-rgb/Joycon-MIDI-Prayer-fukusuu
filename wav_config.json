@@ -1,0 +1,9 @@
+{
+  "soundfont": "E:\\rise-\\FluidR3_GM.sf2",
+  "midi_dir": "midi_notes",
+  "output_dir": "wav_notes",
+  "sample_rate": 44100,
+  "gain": 0.8,
+  "tail_seconds": 3.0,
+  "fluidsynth_command": "fluidsynth"
+}
