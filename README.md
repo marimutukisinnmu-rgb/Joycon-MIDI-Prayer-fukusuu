@@ -78,19 +78,19 @@ py -m pip install hidapi mido
 Select a MIDI file using the file picker (the requested `--files ""` form):
 
 ```powershell
-py joycon_midi_rumble_4jc.py --files ""
+py joycon_midi_rumble_4jc.py -files ""
 ```
 
 Or provide one full MIDI file:
 
 ```powershell
-py joycon_midi_rumble_4jc.py --files "E:\\music\\song.mid"
+py joycon_midi_rumble_4jc.py -files "E:\\music\\song.mid"
 ```
 
 Or provide five separate MIDI files in A-E order:
 
 ```powershell
-py joycon_midi_rumble_4jc.py --files "A.mid" "B.mid" "C.mid" "D.mid" "E.mid"
+py joycon_midi_rumble_4jc.py -files "A.mid" "B.mid" "C.mid" "D.mid" "E.mid"
 ```
 
 Connect four Joy-Cons before starting. The program lists detected HID interfaces and asks you to choose four indexes. If the MIDI's first measure should be reserved for piano, add `--skip-first-bar --bpm 120`; this filters drum events from the first 4/4 bar.
