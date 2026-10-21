@@ -277,9 +277,16 @@ def main() -> None:
             device.connect()
             connected.append(device)
 
-        start_delay = (4.0 * 60.0 / args.bpm) if args.skip_first_bar else 0.0
         if args.skip_first_bar:
-            print(f"Skipping first 4/4 bar ({start_delay:.2f} s at {args.bpm:g} BPM).")
+            bar_seconds = 4.0 * 60.0 / args.bpm
+            # Drop events in the first 4/4 measure and shift the remaining timeline to zero.
+            for i, track_events in enumerate(events):
+                events[i] = [
+                    (t - bar_seconds, kind, note, velocity)
+                    for t, kind, note, velocity in track_events
+                    if t >= bar_seconds
+                ]
+            print(f"Skipping events in the first 4/4 bar ({bar_seconds:.2f} s at {args.bpm:g} BPM).")
         print("Routing: J1 Low=A/High=B; J2 Low=C/High=C; J3 Low=D/High=D; J4 Low=E/High=E")
         print("Experimental rumble encoding; press Ctrl+C to stop.")
         start = time.perf_counter()
