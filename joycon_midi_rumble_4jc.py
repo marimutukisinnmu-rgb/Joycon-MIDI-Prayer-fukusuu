@@ -253,7 +253,7 @@ def velocity_amplitude(velocity: int) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Play channel-10 MIDI drums as 4-Joy-Con rumble.")
-    parser.add_argument("--files", nargs="*", default=[],
+    parser.add_argument("-files", "--files", nargs="*", default=[],
                         help='one MIDI path, five paths A-E, or "" to open a file picker')
     parser.add_argument("--skip-first-bar", action="store_true",
                         help="skip one measure before starting drums (default: off)")
