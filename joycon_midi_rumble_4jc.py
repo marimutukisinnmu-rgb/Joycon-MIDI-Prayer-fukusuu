@@ -1,16 +1,19 @@
-"""Experimental 4-Joy-Con MIDI rumble player.
+"""Experimental 1-4 Joy-Con MIDI rumble player.
 
 Routing:
   J1: Low = Track A, High = Track B
-  J2: Low = Track C, High = Track C
-  J3: Low = Track D, High = Track D
-  J4: Low = Track E, High = Track E
+  J2: Low + High = Track C
+  J3: Low + High = Track D
+  J4: Low + High = Track E
 
 Input:
-  --files ""             opens a MIDI file picker (Windows desktop)
-  --files song.mid       one MIDI with five drum tracks (channel 10), mapped A-E
-  --files A.mid B.mid C.mid D.mid E.mid
-                         five MIDI files, one per track A-E
+  -files ""             opens a MIDI file picker (Windows desktop)
+  -files song.mid       one MIDI with up to five drum tracks (channel 10), mapped A-E
+  -files A.mid B.mid C.mid D.mid E.mid
+                        five MIDI files, one per track A-E
+
+With fewer than four Joy-Cons, the program uses the connected/selected devices
+in order, so one Joy-Con tests A/B, two test A/B and C, and so on.
 
 This is an experimental encoding based on the project's current rumble tests.
 It does not guarantee accurate or perceptually independent frequency reproduction.
@@ -31,14 +34,6 @@ VID = 0x057E
 JOYCON_PIDS = {0x2006, 0x2007}  # Left and Right Joy-Con
 NEUTRAL = bytes([0x00, 0x01, 0x40, 0x40])
 TRACK_NAMES = ("A", "B", "C", "D", "E")
-# (Joy-Con index, band): each track can feed one band.
-ROUTING = {
-    "A": [(0, "low")],
-    "B": [(0, "high")],
-    "C": [(1, "low"), (1, "high")],
-    "D": [(2, "low"), (2, "high")],
-    "E": [(3, "low"), (3, "high")],
-}
 MIN_FREQ = 40.0
 MAX_FREQ = 1252.0
 
@@ -145,23 +140,31 @@ def find_joycons() -> list[dict[str, Any]]:
 
 def choose_joycons() -> list[JoyConDevice]:
     found = find_joycons()
-    if len(found) < 4:
+    if not found:
         raise RuntimeError(
-            f"Found {len(found)} Joy-Con HID interface(s), need 4. "
-            "Connect four Joy-Cons and close software that may be using them."
+            "No Joy-Con HID interfaces found. Connect at least one Joy-Con "
+            "and close software that may be using it."
         )
     print("Detected Joy-Con HID interfaces:")
     for i, item in enumerate(found):
         side = "Left" if item["product_id"] == 0x2006 else "Right"
         print(f"  [{i}] {side} Joy-Con | product={item.get('product_string')} "
               f"| serial={item.get('serial_number') or '(none)'}")
-    raw = input("Choose four indexes separated by commas (example: 0,1,2,3): ")
+    count = min(4, len(found))
+    if len(found) < 4:
+        print(f"Only {len(found)} matching HID interface(s) found; entering partial test mode.")
+        print(f"Will use {count} interface(s).")
+    prompt = (
+        f"Choose {count} index(es) separated by commas "
+        f"(example: {','.join(str(i) for i in range(count))}): "
+    )
+    raw = input(prompt)
     try:
-        indexes = [int(x.strip()) for x in raw.split(",")]
+        indexes = [int(x.strip()) for x in raw.split(",") if x.strip()]
     except ValueError as exc:
         raise RuntimeError("Indexes must be numbers separated by commas.") from exc
-    if len(indexes) != 4 or len(set(indexes)) != 4:
-        raise RuntimeError("Enter exactly four different indexes.")
+    if len(indexes) != count or len(set(indexes)) != count:
+        raise RuntimeError(f"Enter exactly {count} different indexes.")
     if any(i < 0 or i >= len(found) for i in indexes):
         raise RuntimeError("One or more indexes are out of range.")
     return [
@@ -173,7 +176,7 @@ def choose_joycons() -> list[JoyConDevice]:
 def select_files(file_args: list[str]) -> list[Path]:
     cleaned = [x for x in file_args if x.strip()]
     if not cleaned:
-        # --files "" intentionally opens a picker.
+        # -files "" intentionally opens a picker.
         try:
             import tkinter as tk
             from tkinter import filedialog
@@ -187,7 +190,7 @@ def select_files(file_args: list[str]) -> list[Path]:
             cleaned = list(selected)
         except Exception as exc:
             raise RuntimeError(
-                'No MIDI path provided. Use --files "song.mid" or a GUI file picker.'
+                'No MIDI path provided. Use -files "song.mid" or a GUI file picker.'
             ) from exc
     paths = [Path(x).expanduser() for x in cleaned]
     if not paths:
@@ -200,26 +203,21 @@ def select_files(file_args: list[str]) -> list[Path]:
     return paths
 
 
-def load_track_events(paths: list[Path]) -> tuple[list[list[tuple[float, str, int, int]]], float]:
+def load_track_events(paths: list[Path]) -> list[list[tuple[float, str, int, int]]]:
     """Return A-E event lists: (seconds, event type, note, velocity)."""
     events: list[list[tuple[float, str, int, int]]] = [[] for _ in TRACK_NAMES]
     if len(paths) == 5:
         for track_idx, path in enumerate(paths):
             midi = mido.MidiFile(path)
             elapsed = 0.0
-            tempo = 500000
             for msg in midi:
-                elapsed += msg.time
-                if msg.type == "set_tempo":
-                    tempo = msg.tempo
-                elif msg.type in ("note_on", "note_off"):
+                elapsed += msg.time  # Mido's merged iterator yields seconds.
+                if msg.type in ("note_on", "note_off"):
                     kind = "on" if msg.type == "note_on" and msg.velocity > 0 else "off"
                     events[track_idx].append((elapsed, kind, msg.note, msg.velocity))
-        # Mido iterates messages with delta time already converted to seconds.
-        return events, 0.0
+        return events
 
     midi = mido.MidiFile(paths[0])
-    # Convert each track independently; use the first five tracks that contain channel-10 notes.
     drum_tracks = []
     for track in midi.tracks:
         if any(getattr(msg, "channel", None) == 9 and msg.type in ("note_on", "note_off")
@@ -239,7 +237,7 @@ def load_track_events(paths: list[Path]) -> tuple[list[list[tuple[float, str, in
             if getattr(msg, "channel", None) == 9 and msg.type in ("note_on", "note_off"):
                 kind = "on" if msg.type == "note_on" and msg.velocity > 0 else "off"
                 events[track_idx].append((elapsed, kind, msg.note, msg.velocity))
-    return events, 0.0
+    return events
 
 
 def note_frequency(note: int) -> float:
@@ -252,7 +250,7 @@ def velocity_amplitude(velocity: int) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Play channel-10 MIDI drums as 4-Joy-Con rumble.")
+    parser = argparse.ArgumentParser(description="Play channel-10 MIDI drums as 1-4 Joy-Con rumble.")
     parser.add_argument("-files", "--files", nargs="*", default=[],
                         help='one MIDI path, five paths A-E, or "" to open a file picker')
     parser.add_argument("--skip-first-bar", action="store_true",
@@ -264,12 +262,10 @@ def main() -> None:
         parser.error("--bpm must be greater than zero")
 
     paths = select_files(args.files)
-    events, _ = load_track_events(paths)
-    # Sort events per track; for one MIDI, track time is converted using its tempo map
+    events = load_track_events(paths)
     for track_events in events:
         track_events.sort(key=lambda x: x[0])
 
-    devices: list[JoyConDevice] = []
     connected: list[JoyConDevice] = []
     try:
         devices = choose_joycons()
@@ -279,7 +275,6 @@ def main() -> None:
 
         if args.skip_first_bar:
             bar_seconds = 4.0 * 60.0 / args.bpm
-            # Drop events in the first 4/4 measure and shift the remaining timeline to zero.
             for i, track_events in enumerate(events):
                 events[i] = [
                     (t - bar_seconds, kind, note, velocity)
@@ -287,13 +282,15 @@ def main() -> None:
                     if t >= bar_seconds
                 ]
             print(f"Skipping events in the first 4/4 bar ({bar_seconds:.2f} s at {args.bpm:g} BPM).")
-        print("Routing: J1 Low=A/High=B; J2 Low=C/High=C; J3 Low=D/High=D; J4 Low=E/High=E")
+
+        print(f"Partial test mode: {len(devices)} Joy-Con(s).")
+        print("Routing: J1=A/B; J2=C; J3=D; J4=E")
         print("Experimental rumble encoding; press Ctrl+C to stop.")
         start = time.perf_counter()
         positions = [0] * 5
         active: list[dict[int, tuple[float, float]]] = [dict() for _ in range(5)]
         while True:
-            now = time.perf_counter() - start - start_delay
+            now = time.perf_counter() - start
             if all(positions[i] >= len(events[i]) for i in range(5)) and not any(active):
                 break
             changed = False
@@ -308,7 +305,7 @@ def main() -> None:
                     changed = True
             if changed:
                 for jc_index, device in enumerate(devices):
-                    low_track = ("A", "C", "D", "E")[jc_index] if jc_index else "A"
+                    low_track = ("A", "C", "D", "E")[jc_index]
                     high_track = ("B", "C", "D", "E")[jc_index]
                     low_idx = TRACK_NAMES.index(low_track)
                     high_idx = TRACK_NAMES.index(high_track)
@@ -327,5 +324,5 @@ def main() -> None:
     print("Playback finished.")
 
 
-if __name__ == "__main__":
+if __path__ == "__main__":
     main()
