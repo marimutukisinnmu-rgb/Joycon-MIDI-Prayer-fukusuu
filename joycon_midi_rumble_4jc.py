@@ -287,7 +287,10 @@ def main() -> None:
                         choices=range(MIN_STRENGTH_PERCENT, MAX_STRENGTH_PERCENT + 1),
                         metavar="0-100",
                         help="global rumble strength ceiling in percent; lower amplitudes are preserved (default: 55)")
-    parser.add_argument("--log", action="store_true",\n                        help="log each Joy-Con rumble payload as hexadecimal and binary")\n    args = parser.parse_args()\n    if args.bpm <= 0:
+    parser.add_argument("--log", action="store_true",
+                        help="log each Joy-Con rumble payload as hexadecimal and binary")
+    args = parser.parse_args()
+    if args.bpm <= 0:
         parser.error("--bpm must be greater than zero")
 
     paths = select_files(args.files)
@@ -317,7 +320,9 @@ def main() -> None:
         print(f"Global rumble strength ceiling: {args.strength}% (range 0-100; default 55%).")
         print("Upper-cap mode: amplitudes below the ceiling are preserved.")
         print("To change the ceiling, add --strength 0 through --strength 100 to the command.")
-        print("Experimental rumble encoding; press Ctrl+C to stop.")\n        if args.log:\n            print("Payload logging enabled: each Jx line shows the 4-byte motor payload in HEX and BIN.")\n        start = time.perf_counter()
+        print("Experimental rumble encoding; press Ctrl+C to stop.")\n        if args.log:
+            print("Payload logging enabled: each Jx line shows the 4-byte motor payload in HEX and BIN.")
+        start = time.perf_counter()
         positions = [0] * 5
         active: list[dict[int, tuple[float, float]]] = [dict() for _ in range(5)]
         while True:
@@ -345,7 +350,9 @@ def main() -> None:
                     low_freq, low_amp = low_note if low_note else (120.0, 0.0)
                     high_freq, high_amp = high_note if high_note else (200.0, 0.0)
                     payload = make_rumble(low_freq, low_amp, high_freq, high_amp)
-                    device.send(payload, payload)\n                    if args.log:\n                        print(f"[{now:8.3f}s] J{jc_index + 1}: {format_payload(payload)}")\n            time.sleep(0.001)
+                    device.send(payload, payload)\n                    if args.log:
+                        print(f"[{now:8.3f}s] J{jc_index + 1}: {format_payload(payload)}")
+            time.sleep(0.001)
     except KeyboardInterrupt:
         print("\nStopped by user.")
     finally:
