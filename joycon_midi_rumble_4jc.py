@@ -250,6 +250,38 @@ def load_track_events(paths: list[Path]) -> list[list[tuple[float, str, int, int
     return events
 
 
+
+def load_mixed_events(path: Path) -> tuple[list[list[tuple[float, str, int, int]]], list[tuple[float, int, int]]]:
+    """Load MIDI channels 1-8 plus channel-10 percussion using Mido's merged timeline.
+
+    Returns eight note-event lists and drum hits as (seconds, note, velocity).
+    Mido's merged iterator applies tempo changes across the whole MIDI file.
+    """
+    midi = mido.MidiFile(path)
+    channels: list[list[tuple[float, str, int, int]]] = [[] for _ in range(8)]
+    drums: list[tuple[float, int, int]] = []
+    elapsed = 0.0
+    for msg in midi:
+        elapsed += msg.time
+        if msg.type not in ("note_on", "note_off"):
+            continue
+        channel = getattr(msg, "channel", None)
+        is_on = msg.type == "note_on" and msg.velocity > 0
+        if channel in range(8):
+            kind = "on" if is_on else "off"
+            channels[channel].append((elapsed, kind, msg.note, msg.velocity))
+        elif channel == 9 and is_on:
+            drums.append((elapsed, msg.note, msg.velocity))
+    return channels, drums
+
+
+def strongest_active_note(active: dict[int, tuple[float, float]]) -> tuple[float, float] | None:
+    """A single rumble component can represent only one pitch: choose the loudest active note."""
+    if not active:
+        return None
+    return max(active.values(), key=lambda item: item[1])
+
+
 def note_frequency(note: int) -> float:
     # Experimental mapping: MIDI note number to equal-tempered frequency.
     return 440.0 * (2.0 ** ((note - 69) / 12.0))
@@ -270,13 +302,15 @@ def format_payload(payload: bytes) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Play channel-10 MIDI drums as 1-4 Joy-Con rumble.")
+    parser = argparse.ArgumentParser(
+        description="Play MIDI channels 1-8 and channel-10 drums through 1-4 Joy-Cons."
+    )
     parser.add_argument("-files", "--files", nargs="*", default=[],
-                        help='one MIDI path, five paths A-E, or "" to open a file picker')
+                        help='one mixed MIDI, five legacy MIDI files A-E, or "" to open a file picker')
     parser.add_argument("--skip-first-bar", action="store_true",
-                        help="skip one measure before starting drums (default: off)")
+                        help="skip one measure before playback")
     parser.add_argument("--bpm", type=float, default=120.0,
-                        help="tempo used to calculate the first measure (default: 120)")
+                        help="tempo used to calculate the skipped 4/4 bar (default: 120)")
     parser.add_argument("--strength", type=int, default=DEFAULT_STRENGTH_PERCENT,
                         choices=range(MIN_STRENGTH_PERCENT, MAX_STRENGTH_PERCENT + 1),
                         metavar="0-100",
@@ -288,9 +322,15 @@ def main() -> None:
         parser.error("--bpm must be greater than zero")
 
     paths = select_files(args.files)
-    events = load_track_events(paths)
-    for track_events in events:
-        track_events.sort(key=lambda x: x[0])
+    mixed_mode = len(paths) == 1
+    if mixed_mode:
+        channel_events, drum_hits = load_mixed_events(paths[0])
+        events = None
+    else:
+        events = load_track_events(paths)
+        channel_events, drum_hits = None, []
+        for track_events in events:
+            track_events.sort(key=lambda x: x[0])
 
     connected: list[JoyConDevice] = []
     try:
@@ -301,58 +341,122 @@ def main() -> None:
 
         if args.skip_first_bar:
             bar_seconds = 4.0 * 60.0 / args.bpm
-            for i, track_events in enumerate(events):
-                events[i] = [
-                    (t - bar_seconds, kind, note, velocity)
-                    for t, kind, note, velocity in track_events
-                    if t >= bar_seconds
-                ]
-            print(f"Skipping events in the first 4/4 bar ({bar_seconds:.2f} s at {args.bpm:g} BPM).")
+            if mixed_mode:
+                channel_events = [[(t - bar_seconds, kind, note, velocity)
+                                   for t, kind, note, velocity in channel
+                                   if t >= bar_seconds] for channel in channel_events]
+                drum_hits = [(t - bar_seconds, note, velocity)
+                             for t, note, velocity in drum_hits if t >= bar_seconds]
+            else:
+                events = [[(t - bar_seconds, kind, note, velocity)
+                           for t, kind, note, velocity in track
+                           if t >= bar_seconds] for track in events]
+            print(f"Skipping the first 4/4 bar ({bar_seconds:.2f} s at {args.bpm:g} BPM).")
 
-        print(f"Partial test mode: {len(devices)} Joy-Con(s).")
-        print("Routing: J1=A/B; J2=C; J3=D; J4=E")
+        print(f"Connected playback devices: {len(devices)} Joy-Con(s).")
+        if mixed_mode:
+            print("Mixed MIDI routing: J1 Low=CH1 / High=CH2; J2 CH3 / CH4; J3 CH5 / CH6; J4 CH7 / CH8.")
+            print("Channel 10 drums are layered as short hits across connected Joy-Cons.")
+            print("Polyphony note: each motor component can express one pitch at a time; the strongest active note is selected.")
+        else:
+            print("Legacy five-file routing: J1=A/B; J2=C; J3=D; J4=E.")
         print(f"Global rumble amplitude scale: {args.strength}% (range 0-100; default 25%).")
-        print("Note: perceived vibration and sound may not scale linearly.")
-        print("To change the scale, add --strength 0 through --strength 100 to the command.")
-        print("Experimental rumble encoding; press Ctrl+C to stop.")
+        print("J1 amplitude is additionally halved as a loudness precaution.")
+        print("Experimental rumble encoding; perceived vibration/sound is nonlinear. Press Ctrl+C to stop.")
         if args.log:
             print("Payload logging enabled: each Jx line shows the 4-byte motor payload in HEX and BIN.")
+
         start = time.perf_counter()
-        positions = [0] * 5
-        active: list[dict[int, tuple[float, float]]] = [dict() for _ in range(5)]
-        while True:
-            now = time.perf_counter() - start
-            if all(positions[i] >= len(events[i]) for i in range(5)) and not any(active):
-                break
-            changed = False
-            for i, track_events in enumerate(events):
-                while positions[i] < len(track_events) and track_events[positions[i]][0] <= now:
-                    _, kind, note, velocity = track_events[positions[i]]
-                    if kind == "on":
-                        active[i][note] = (note_frequency(note), velocity_amplitude(velocity, args.strength))
-                    else:
-                        active[i].pop(note, None)
-                    positions[i] += 1
+        if mixed_mode:
+            positions = [0] * 8
+            active_channels: list[dict[int, tuple[float, float]]] = [dict() for _ in range(8)]
+            drum_pos = 0
+            drum_until = 0.0
+            drum_note: tuple[float, float] | None = None
+            while True:
+                now = time.perf_counter() - start
+                all_notes_done = all(positions[i] >= len(channel_events[i]) for i in range(8))
+                if all_notes_done and drum_pos >= len(drum_hits) and not any(active_channels) and now >= drum_until:
+                    break
+                changed = False
+                for ch, channel in enumerate(channel_events):
+                    while positions[ch] < len(channel) and channel[positions[ch]][0] <= now:
+                        _, kind, note, velocity = channel[positions[ch]]
+                        if kind == "on":
+                            active_channels[ch][note] = (
+                                note_frequency(note), velocity_amplitude(velocity, args.strength)
+                            )
+                        else:
+                            active_channels[ch].pop(note, None)
+                        positions[ch] += 1
+                        changed = True
+                while drum_pos < len(drum_hits) and drum_hits[drum_pos][0] <= now:
+                    _, drum_pitch, drum_velocity = drum_hits[drum_pos]
+                    drum_note = (
+                        note_frequency(max(24, min(96, drum_pitch))),
+                        velocity_amplitude(drum_velocity, args.strength)
+                    )
+                    drum_until = now + 0.085
+                    drum_pos += 1
                     changed = True
-            if changed:
-                for jc_index, device in enumerate(devices):
-                    low_track = ("A", "C", "D", "E")[jc_index]
-                    high_track = ("B", "C", "D", "E")[jc_index]
-                    low_idx = TRACK_NAMES.index(low_track)
-                    high_idx = TRACK_NAMES.index(high_track)
-                    low_note = next(iter(active[low_idx].values()), None)
-                    high_note = next(iter(active[high_idx].values()), None)
-                    low_freq, low_amp = low_note if low_note else (120.0, 0.0)
-                    high_freq, high_amp = high_note if high_note else (200.0, 0.0)
-                    # J1 is especially loud on this setup: halve its Low/High amplitudes.
-                    if jc_index == 0:
-                        low_amp *= 0.5
-                        high_amp *= 0.5
-                    payload = make_rumble(low_freq, low_amp, high_freq, high_amp)
-                    device.send(payload, payload)
-                    if args.log:
-                        print(f"[{now:8.3f}s] J{jc_index + 1}: {format_payload(payload)}")
-            time.sleep(0.001)
+                if drum_note is not None and now >= drum_until:
+                    drum_note = None
+                    changed = True
+                if changed:
+                    for jc_index, device in enumerate(devices):
+                        low_ch = jc_index * 2
+                        high_ch = low_ch + 1
+                        low_note = strongest_active_note(active_channels[low_ch])
+                        high_note = strongest_active_note(active_channels[high_ch])
+                        if drum_note is not None:
+                            # Brief percussion overlay takes priority for the hit's 85 ms.
+                            low_note = drum_note
+                            high_note = drum_note
+                        low_freq, low_amp = low_note if low_note else (120.0, 0.0)
+                        high_freq, high_amp = high_note if high_note else (200.0, 0.0)
+                        if jc_index == 0:
+                            low_amp *= 0.5
+                            high_amp *= 0.5
+                        payload = make_rumble(low_freq, low_amp, high_freq, high_amp)
+                        device.send(payload, payload)
+                        if args.log:
+                            print(f"[{now:8.3f}s] J{jc_index + 1}: {format_payload(payload)}")
+                time.sleep(0.001)
+        else:
+            positions = [0] * 5
+            active: list[dict[int, tuple[float, float]]] = [dict() for _ in range(5)]
+            while True:
+                now = time.perf_counter() - start
+                if all(positions[i] >= len(events[i]) for i in range(5)) and not any(active):
+                    break
+                changed = False
+                for i, track_events in enumerate(events):
+                    while positions[i] < len(track_events) and track_events[positions[i]][0] <= now:
+                        _, kind, note, velocity = track_events[positions[i]]
+                        if kind == "on":
+                            active[i][note] = (note_frequency(note), velocity_amplitude(velocity, args.strength))
+                        else:
+                            active[i].pop(note, None)
+                        positions[i] += 1
+                        changed = True
+                if changed:
+                    for jc_index, device in enumerate(devices):
+                        low_track = ("A", "C", "D", "E")[jc_index]
+                        high_track = ("B", "C", "D", "E")[jc_index]
+                        low_idx = TRACK_NAMES.index(low_track)
+                        high_idx = TRACK_NAMES.index(high_track)
+                        low_note = strongest_active_note(active[low_idx])
+                        high_note = strongest_active_note(active[high_idx])
+                        low_freq, low_amp = low_note if low_note else (120.0, 0.0)
+                        high_freq, high_amp = high_note if high_note else (200.0, 0.0)
+                        if jc_index == 0:
+                            low_amp *= 0.5
+                            high_amp *= 0.5
+                        payload = make_rumble(low_freq, low_amp, high_freq, high_amp)
+                        device.send(payload, payload)
+                        if args.log:
+                            print(f"[{now:8.3f}s] J{jc_index + 1}: {format_payload(payload)}")
+                time.sleep(0.001)
     except KeyboardInterrupt:
         print("\nStopped by user.")
     finally:
