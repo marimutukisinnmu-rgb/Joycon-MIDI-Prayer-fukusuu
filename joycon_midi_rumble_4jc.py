@@ -165,21 +165,16 @@ def choose_joycons() -> list[JoyConDevice]:
         side = "Left" if item["product_id"] == 0x2006 else "Right"
         print(f"  [{i}] {side} Joy-Con | product={item.get('product_string')} "
               f"| serial={item.get('serial_number') or '(none)'}")
-    count = min(4, len(found))
-    if len(found) < 4:
-        print(f"Only {len(found)} matching HID interface(s) found; entering partial test mode.")
-        print(f"Will use {count} interface(s).")
-    prompt = (
-        f"Choose {count} index(es) separated by commas "
-        f"(example: {','.join(str(i) for i in range(count))}): "
-    )
+    max_count = min(4, len(found))
+    print(f"Select 1-{max_count} interface(s); enter indexes separated by commas.")
+    prompt = f"Choose index(es) (example: 0,2; max {max_count}): "
     raw = input(prompt)
     try:
         indexes = [int(x.strip()) for x in raw.split(",") if x.strip()]
     except ValueError as exc:
         raise RuntimeError("Indexes must be numbers separated by commas.") from exc
-    if len(indexes) != count or len(set(indexes)) != count:
-        raise RuntimeError(f"Enter exactly {count} different indexes.")
+    if not indexes or len(indexes) > max_count or len(set(indexes)) != len(indexes):
+        raise RuntimeError(f"Enter 1-{max_count} different indexes.")
     if any(i < 0 or i >= len(found) for i in indexes):
         raise RuntimeError("One or more indexes are out of range.")
     return [
@@ -339,6 +334,8 @@ def main() -> None:
     )
     parser.add_argument("-files", "--files", nargs="*", default=[],
                         help='one mixed MIDI, five legacy MIDI files A-E, or "" to open a file picker')
+    parser.add_argument("--mode", choices=("mixed", "piano"), default="mixed",
+                        help="mixed: channels 1-8 plus channel-10 drums; piano: melodic notes only")
     parser.add_argument("--skip-first-bar", action="store_true",
                         help="skip one measure before playback")
     parser.add_argument("--bpm", type=float, default=120.0,
@@ -355,8 +352,11 @@ def main() -> None:
 
     paths = select_files(args.files)
     mixed_mode = len(paths) == 1
+    piano_mode = mixed_mode and args.mode == "piano"
     if mixed_mode:
         channel_events, drum_hits, fast_channels = load_mixed_events(paths[0])
+        if piano_mode:
+            drum_hits = []
         events = None
     else:
         events = load_track_events(paths)
@@ -387,14 +387,18 @@ def main() -> None:
 
         print(f"Connected playback devices: {len(devices)} Joy-Con(s).")
         if mixed_mode:
-            print("Mixed MIDI routing: J1 Low=CH1 / High=CH2; J2 CH3 / CH4; J3 CH5 / CH6; J4 CH7 / CH8.")
-            print("Channel 10 drums are layered as short hits across connected Joy-Cons.")
+            if piano_mode:
+                print("Piano mode: MIDI channels 1-8 mapped to Joy-Con motor components; note-off controls note length.")
+            else:
+                print("Mixed MIDI routing: J1 Low=CH1 / High=CH2; J2 CH3 / CH4; J3 CH5 / CH6; J4 CH7 / CH8.")
+                print("Channel 10 drums are layered as short hits across connected Joy-Cons.")
             print("Auto attenuation: halve a Joy-Con when it has two assigned channels or either assigned channel has 4+ note-ons within one beat.")
             print("Polyphony note: each motor component can express one pitch at a time; the strongest active note is selected.")
         else:
             print("Legacy five-file routing: J1=A/B; J2=C; J3=D; J4=E.")
         print(f"Global rumble amplitude scale: {args.strength}% (range 0-100; default 25%).")
-        print("J1 amplitude is additionally halved as a loudness precaution.")
+        if not piano_mode:
+            print("J1 amplitude is additionally halved as a loudness precaution.")
         print("Experimental rumble encoding; perceived vibration/sound is nonlinear. Press Ctrl+C to stop.")
         if args.log:
             print("Payload logging enabled: each Jx line shows the 4-byte motor payload in HEX and BIN.")
@@ -447,16 +451,16 @@ def main() -> None:
                             high_note = drum_note
                         low_freq, low_amp = low_note if low_note else (120.0, 0.0)
                         high_freq, high_amp = high_note if high_note else (200.0, 0.0)
-                        # Automatic -6 dB-style amplitude factor: two channels assigned, or a fast roll detected.
-                        assigned_channels = (low_ch, high_ch)
-                        apply_half = len(assigned_channels) >= 2 or any(fast_channels[ch] for ch in assigned_channels)
-                        if apply_half:
-                            low_amp *= 0.5
-                            high_amp *= 0.5
-                        # Preserve the existing extra J1 loudness precaution.
-                        if jc_index == 0:
-                            low_amp *= 0.5
-                            high_amp *= 0.5
+                        # Mixed mode attenuates busy channel pairs; piano mode preserves selected strength.
+                        if not piano_mode:
+                            assigned_channels = (low_ch, high_ch)
+                            apply_half = len(assigned_channels) >= 2 or any(fast_channels[ch] for ch in assigned_channels)
+                            if apply_half:
+                                low_amp *= 0.5
+                                high_amp *= 0.5
+                            if jc_index == 0:
+                                low_amp *= 0.5
+                                high_amp *= 0.5
                         payload = make_rumble(low_freq, low_amp, high_freq, high_amp)
                         device.send(payload, payload)
                         if args.log:
