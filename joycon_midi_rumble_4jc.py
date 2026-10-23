@@ -17,6 +17,11 @@ Strength:
   --strength 100        use the full calculated amplitude
   --strength 0          silence all note amplitudes
   --log                 print each Joy-Con rumble payload in hex and binary
+
+Mixed MIDI attenuation:
+  Each Joy-Con is automatically attenuated by 50% when assigned two channels,
+  or when either assigned channel contains 4+ note-ons within one beat.
+  J1 retains its additional 50% loudness precaution; --strength remains global.
   Valid range is 0-100%. Perceived vibration and sound do not scale linearly.
 
 With fewer than four Joy-Cons, the program uses the connected/selected devices
@@ -251,7 +256,7 @@ def load_track_events(paths: list[Path]) -> list[list[tuple[float, str, int, int
 
 
 
-def load_mixed_events(path: Path) -> tuple[list[list[tuple[float, str, int, int]]], list[tuple[float, int, int]]]:
+def load_mixed_events(path: Path) -> tuple[list[list[tuple[float, str, int, int]]], list[tuple[float, int, int]], list[bool]]:
     """Load MIDI channels 1-8 plus channel-10 percussion using Mido's merged timeline.
 
     Returns eight note-event lists and drum hits as (seconds, note, velocity).
@@ -260,9 +265,16 @@ def load_mixed_events(path: Path) -> tuple[list[list[tuple[float, str, int, int]
     midi = mido.MidiFile(path)
     channels: list[list[tuple[float, str, int, int]]] = [[] for _ in range(8)]
     drums: list[tuple[float, int, int]] = []
+    tempo_changes: list[tuple[float, int]] = [(0.0, 500000)]
     elapsed = 0.0
+    current_tempo = 500000
+    note_on_times: list[list[float]] = [[] for _ in range(8)]
     for msg in midi:
         elapsed += msg.time
+        if msg.type == "set_tempo":
+            current_tempo = msg.tempo
+            tempo_changes.append((elapsed, current_tempo))
+            continue
         if msg.type not in ("note_on", "note_off"):
             continue
         channel = getattr(msg, "channel", None)
@@ -270,9 +282,29 @@ def load_mixed_events(path: Path) -> tuple[list[list[tuple[float, str, int, int]
         if channel in range(8):
             kind = "on" if is_on else "off"
             channels[channel].append((elapsed, kind, msg.note, msg.velocity))
+            if is_on:
+                note_on_times[channel].append(elapsed)
         elif channel == 9 and is_on:
             drums.append((elapsed, msg.note, msg.velocity))
-    return channels, drums
+
+    # A fast roll means four or more note-on events in a window no longer than
+    # one beat. Use the tempo active at the beginning of each candidate window.
+    def beat_seconds_at(moment: float) -> float:
+        tempo = 500000
+        for tempo_time, tempo_value in tempo_changes:
+            if tempo_time > moment:
+                break
+            tempo = tempo_value
+        return tempo / 1_000_000.0
+
+    fast_channels = [False] * 8
+    for ch, onset_times in enumerate(note_on_times):
+        for i in range(len(onset_times) - 3):
+            window_start = onset_times[i]
+            if onset_times[i + 3] - window_start <= beat_seconds_at(window_start):
+                fast_channels[ch] = True
+                break
+    return channels, drums, fast_channels
 
 
 def strongest_active_note(active: dict[int, tuple[float, float]]) -> tuple[float, float] | None:
@@ -324,11 +356,11 @@ def main() -> None:
     paths = select_files(args.files)
     mixed_mode = len(paths) == 1
     if mixed_mode:
-        channel_events, drum_hits = load_mixed_events(paths[0])
+        channel_events, drum_hits, fast_channels = load_mixed_events(paths[0])
         events = None
     else:
         events = load_track_events(paths)
-        channel_events, drum_hits = None, []
+        channel_events, drum_hits, fast_channels = None, [], [False] * 8
         for track_events in events:
             track_events.sort(key=lambda x: x[0])
 
@@ -357,6 +389,7 @@ def main() -> None:
         if mixed_mode:
             print("Mixed MIDI routing: J1 Low=CH1 / High=CH2; J2 CH3 / CH4; J3 CH5 / CH6; J4 CH7 / CH8.")
             print("Channel 10 drums are layered as short hits across connected Joy-Cons.")
+            print("Auto attenuation: halve a Joy-Con when it has two assigned channels or either assigned channel has 4+ note-ons within one beat.")
             print("Polyphony note: each motor component can express one pitch at a time; the strongest active note is selected.")
         else:
             print("Legacy five-file routing: J1=A/B; J2=C; J3=D; J4=E.")
@@ -414,6 +447,13 @@ def main() -> None:
                             high_note = drum_note
                         low_freq, low_amp = low_note if low_note else (120.0, 0.0)
                         high_freq, high_amp = high_note if high_note else (200.0, 0.0)
+                        # Automatic -6 dB-style amplitude factor: two channels assigned, or a fast roll detected.
+                        assigned_channels = (low_ch, high_ch)
+                        apply_half = len(assigned_channels) >= 2 or any(fast_channels[ch] for ch in assigned_channels)
+                        if apply_half:
+                            low_amp *= 0.5
+                            high_amp *= 0.5
+                        # Preserve the existing extra J1 loudness precaution.
                         if jc_index == 0:
                             low_amp *= 0.5
                             high_amp *= 0.5
